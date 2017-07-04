@@ -17,7 +17,9 @@ limitations under the License.
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 
@@ -30,8 +32,8 @@ import (
 // SetupHandlers configures API handlers.
 func SetupHandlers() *mux.Router {
 	router := mux.NewRouter()
-	router.HandleFunc("/api/info", infoHandler).Methods("GET")
-	router.HandleFunc("/api/complete", completeHandler).Methods("POST")
+	router.HandleFunc("/api/info", noCaching(infoHandler)).Methods("GET")
+	router.HandleFunc("/api/complete", noCaching(completeHandler)).Methods("POST")
 	router.PathPrefix("/").Handler(http.FileServer(http.Dir(assetsDir)))
 	return router
 }
@@ -58,6 +60,57 @@ func infoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	replyString(w, string(info))
+}
+
+type htppHandler func(http.ResponseWriter, *http.Request)
+
+// noCaching tells proxies and browsers do not cache HTTP traffic
+func noCaching(fn htppHandler) htppHandler {
+	return func(w http.ResponseWriter, r *http.Request) {
+		setNoCacheHeaders(w.Header())
+		fn(w, r)
+	}
+}
+
+// setNoCacheHeaders tells proxies and browsers do not cache the content
+func setNoCacheHeaders(h http.Header) {
+	h.Set("Cache-Control", "no-cache, max-age=0, must-revalidate, no-store")
+	h.Set("Pragma", "no-cache")
+	h.Set("Expires", "0")
+}
+
+// setIndexHTMLHeaders sets security header flags for main index.html page
+func setIndexHTMLHeaders(h http.Header) {
+	// Disable caching
+	setNoCacheHeaders(h)
+
+	// X-Frame-Options indicates that the page can only be displayed in iframe on the same origin as the page itself
+	h.Set("X-Frame-Options", "SAMEORIGIN")
+
+	// X-XSS-Protection is a feature of Internet Explorer, Chrome and Safari that stops pages
+	// from loading when they detect reflected cross-site scripting (XSS) attacks.
+	h.Set("X-XSS-Protection", "1; mode=block")
+
+	// Once a supported browser receives this header that browser will prevent any communications from
+	// being sent over HTTP to the specified domain and will instead send all communications over HTTPS.
+	// It also prevents HTTPS click through prompts on browsers
+	h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+	// Prevent web browsers from using content sniffing to discover a file’s MIME type
+	h.Set("X-Content-Type-Options", "nosniff")
+
+	// Set content policy flags,
+	// 'unsafe-inline' attribute is fine for our SPA case
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "base-uri 'self'")
+	fmt.Fprintf(&b, "; script-src 'self' 'unsafe-inline'")
+	fmt.Fprintf(&b, "; style-src 'self' 'unsafe-inline'")
+	fmt.Fprintf(&b, "; img-src 'self' data: blob:")
+	fmt.Fprintf(&b, "; child-src 'self'")
+
+	h.Set("Content-Security-Policy", b.String())
+
+	return
 }
 
 // completeHandler configures the site according to the data in the request
